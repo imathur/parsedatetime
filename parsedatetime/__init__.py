@@ -577,7 +577,7 @@ class Calendar(object):
                 chunk2 = s[m.end():]
                 s = '%s %s' % (chunk1, chunk2)
 
-                sourceTime, ctx = self.parse(s, sourceTime,
+                sourceTime, ctx, relqty = self.parse(s, sourceTime,
                                              VERSION_CONTEXT_STYLE)
 
                 if not ctx.hasDateOrTime:
@@ -656,9 +656,9 @@ class Calendar(object):
             startDT = endDT = time.localtime()
 
         if retFlag:
-            startDT, sctx = self.parse(startStr, sourceTime,
+            startDT, sctx, relqty = self.parse(startStr, sourceTime,
                                        VERSION_CONTEXT_STYLE)
-            endDT, ectx = self.parse(endStr, sourceTime,
+            endDT, ectx, relqty = self.parse(endStr, sourceTime,
                                      VERSION_CONTEXT_STYLE)
 
             if not sctx.hasDateOrTime or not ectx.hasDateOrTime:
@@ -779,14 +779,21 @@ class Calendar(object):
         # capture the units after the modifier and the remaining
         # string after the unit
         m = self.ptc.CRE_REMAINING.search(chunk2)
+        relqty = 0
         if m is not None:
             index = m.start() + 1
             unit = chunk2[:m.start()]
+            ### ADDED CHANGES HERE ###
+            m = self.ptc.CRE_NUMBER.match(unit)
+            if m:
+                relqty = int(self._quantityToReal(m.group()))
+            ### END CHANGES ###
             chunk2 = chunk2[index:]
         else:
             unit = chunk2
             chunk2 = ''
 
+        offsetByUnit = None
         debug and logging.debug(f'modifier [{modifier}] chunk1 [{chunk1}] chunk2 [{chunk2}] unit [{unit}]')
 
         if unit in self.ptc.units['months']:
@@ -884,7 +891,7 @@ class Calendar(object):
             if modifier == 'eod':
                 ctx.updateAccuracy(ctx.ACU_HOUR)
                 # Calculate the upcoming weekday
-                sourceTime, subctx = self.parse(wkdy, sourceTime,
+                sourceTime, subctx, relqty = self.parse(wkdy, sourceTime,
                                                 VERSION_CONTEXT_STYLE)
                 sTime = self.ptc.getSource(modifier, sourceTime)
                 if sTime is not None:
@@ -911,7 +918,7 @@ class Calendar(object):
                     # consider "one day before thursday": we need to parse chunk1 ("one day")
                     # and apply according to the offset ("before"), rather than allowing the
                     # remaining parse step to apply "one day" without the offset direction.
-                    t, subctx = self.parse(chunk1, sourceTime, VERSION_CONTEXT_STYLE)
+                    t, subctx, relqty = self.parse(chunk1, sourceTime, VERSION_CONTEXT_STYLE)
                     if subctx.hasDateOrTime:
                         delta = time.mktime(t) - time.mktime(sourceTime)
                         target = start + datetime.timedelta(days=diff) + datetime.timedelta(seconds=delta * offset)
@@ -929,8 +936,8 @@ class Calendar(object):
             start = datetime.datetime(yr, mth, dy, hr, mn, sec)
             target = start + datetime.timedelta(days=offset)
             sourceTime = target.timetuple()
-        elif unit.isdigit() and chunk2 in self.ptc.units['days']:
-            offsetByUnit = int(unit)
+        elif (unit.isdigit() or relqty) and chunk2 in self.ptc.units['days']:
+            offsetByUnit = int(unit) if unit.isdigit() else relqty
             if offset == 0 and offsetByUnit == 0:
                 sourceTime = (yr, mth, dy, 17, 0, 0, wd, yd, isdst)
                 ctx.updateAccuracy(ctx.ACU_HALFDAY)
@@ -945,8 +952,8 @@ class Calendar(object):
                 sourceTime = target.timetuple()
             ctx.updateAccuracy(ctx.ACU_DAY)
 
-        elif unit.isdigit() and chunk2 in self.ptc.units['weeks']:
-            offsetByUnit = int(unit)
+        elif (unit.isdigit() or relqty) and chunk2 in self.ptc.units['weeks']:
+            offsetByUnit = int(unit) if unit.isdigit() else relqty
             if offset == 0:
                 start = datetime.datetime(yr, mth, dy, 17, 0, 0)
                 target = start + datetime.timedelta(days=(4 - wd))
@@ -963,8 +970,8 @@ class Calendar(object):
                 sourceTime = target.timetuple()
             ctx.updateAccuracy(ctx.ACU_WEEK)
 
-        elif unit.isdigit() and chunk2 in self.ptc.units['months']:
-            offsetByUnit = int(unit)
+        elif (unit.isdigit() or relqty) and chunk2 in self.ptc.units['months']:
+            offsetByUnit = int(unit) if unit.isdigit() else relqty
             currentDaysInMonth = self.ptc.daysInMonth(mth, yr)
             if offset == 0:
                 dy = currentDaysInMonth
@@ -996,7 +1003,7 @@ class Calendar(object):
             unit = unit.strip()
             if unit:
                 s = '%s %s' % (unit, chunk2)
-                t, subctx = self.parse(s, sourceTime, VERSION_CONTEXT_STYLE)
+                t, subctx, relqty = self.parse(s, sourceTime, VERSION_CONTEXT_STYLE)
 
                 if subctx.hasDate:  # working with dates
                     u = unit.lower()
@@ -1029,7 +1036,7 @@ class Calendar(object):
                     qty = self._quantityToReal(m.group()) * offset
                     chunk1 = '%s%s%s' % (chunk1[:m.start()],
                                          qty, chunk1[m.end():])
-                t, subctx = self.parse(chunk1, sourceTime,
+                t, subctx, relqty = self.parse(chunk1, sourceTime,
                                        VERSION_CONTEXT_STYLE)
 
                 chunk1 = ''
@@ -1046,7 +1053,7 @@ class Calendar(object):
 
         debug and logging.debug(f'returning chunk = "{chunk1} {chunk2}" and sourceTime = {sourceTime}')
 
-        return '%s %s' % (chunk1, chunk2), sourceTime
+        return ('%s %s' % (chunk1, chunk2), offsetByUnit), sourceTime
 
     def _evalDT(self, datetimeString, sourceTime):
         """
@@ -1794,7 +1801,7 @@ class Calendar(object):
         )
 
         # Punt
-        time_struct, ret_code = self.parse(
+        time_struct, ret_code, relqty = self.parse(
             datetimeString,
             sourceTime=sourceTime,
             version=version)
@@ -1869,7 +1876,10 @@ class Calendar(object):
                                   self._partialParseTimeStd):
                     retS, retTime, matched = parseMeth(s, sourceTime)
                     if matched:
-                        s, sourceTime = retS.strip(), retTime
+                        if type(retS) == str:
+                            s, sourceTime, relqty = retS.strip(), retTime, 0
+                        else:
+                            s, sourceTime, relqty = retS[0].strip(), retTime, retS[1]
                         break
                 else:
                     # nothing matched
@@ -1888,9 +1898,9 @@ class Calendar(object):
 
         version = self.version if version is None else version
         if version == VERSION_CONTEXT_STYLE:
-            return sourceTime, ctx
+            return sourceTime, ctx, relqty
         else:
-            return sourceTime, ctx.dateTimeFlag
+            return sourceTime, ctx.dateTimeFlag, relqty
 
     def inc(self, source, month=None, year=None):
         """
@@ -2232,7 +2242,7 @@ class Calendar(object):
                     if date or time or units:
                         combined = orig_inputstring[matches[from_match_index]
                                                     [0]:matches[i - 1][1]]
-                        parsed_datetime, flags = self.parse(combined,
+                        parsed_datetime, flags, relqty = self.parse(combined,
                                                             sourceTime,
                                                             version)
                         proximity_matches.append((
@@ -2260,7 +2270,7 @@ class Calendar(object):
             if date or time or units:
                 combined = orig_inputstring[matches[from_match_index][0]:
                                             matches[len(matches) - 1][1]]
-                parsed_datetime, flags = self.parse(combined, sourceTime,
+                parsed_datetime, flags, relqty = self.parse(combined, sourceTime,
                                                     version)
                 proximity_matches.append((
                     datetime.datetime(*parsed_datetime[:6]),
@@ -2276,7 +2286,7 @@ class Calendar(object):
                 return None
             else:
                 combined = orig_inputstring[matches[0][0]:matches[0][1]]
-                parsed_datetime, flags = self.parse(matches[0][2], sourceTime,
+                parsed_datetime, flags, relqty = self.parse(matches[0][2], sourceTime,
                                                     version)
                 proximity_matches.append((
                     datetime.datetime(*parsed_datetime[:6]),
