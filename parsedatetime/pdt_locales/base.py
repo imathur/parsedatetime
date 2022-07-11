@@ -124,6 +124,7 @@ Modifiers = {
     'eod': 1,
     'eom': 1,
     'eoy': 1,
+    'since': -1,
 }
 
 dayOffsets = {
