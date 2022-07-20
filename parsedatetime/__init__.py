@@ -1881,9 +1881,9 @@ class Calendar(object):
                         else:
                             s, sourceTime, relqty = retS[0].strip(), retTime, retS[1]
                         break
-                else:
-                    # nothing matched
-                    s = ''
+                    else:
+                        # nothing matched
+                        s, relqty = '', 0
 
                 debug and logging.debug(f'hasDate: [{ctx.hasDate}], hasTime: [{ctx.hasTime}]')
                 debug and logging.debug(f'remainedString: [{s}]')
